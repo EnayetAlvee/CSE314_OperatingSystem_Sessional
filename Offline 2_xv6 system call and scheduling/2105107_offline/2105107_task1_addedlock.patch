@@ -1,0 +1,402 @@
+diff --git a/.vscode/settings.json b/.vscode/settings.json
+new file mode 100644
+index 0000000..b86226b
+--- /dev/null
++++ b/.vscode/settings.json
+@@ -0,0 +1,8 @@
++{
++    "files.associations": {
++        "user.h": "c",
++        "types.h": "c",
++        "stat.h": "c",
++        "defs.h": "c"
++    }
++}
+\ No newline at end of file
+diff --git a/Makefile b/Makefile
+index f8c820e..22a3400 100644
+--- a/Makefile
++++ b/Makefile
+@@ -28,7 +28,8 @@ OBJS = \
+   $K/sysfile.o \
+   $K/kernelvec.o \
+   $K/plic.o \
+-  $K/virtio_disk.o
++  $K/virtio_disk.o \
++  $K/stat.o
+ 
+ # riscv64-unknown-elf- or riscv64-linux-gnu-
+ # perhaps in /opt/riscv/bin
+@@ -139,6 +140,7 @@ UPROGS=\
+ 	$U/_grind\
+ 	$U/_wc\
+ 	$U/_zombie\
++	$U/_history\
+ 
+ fs.img: mkfs/mkfs README $(UPROGS)
+ 	mkfs/mkfs fs.img README $(UPROGS)
+diff --git a/kernel/defs.h b/kernel/defs.h
+index d1b6bb9..472836c 100644
+--- a/kernel/defs.h
++++ b/kernel/defs.h
+@@ -106,6 +106,7 @@ void            yield(void);
+ int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
+ int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
+ void            procdump(void);
++int             history(int);
+ 
+ // swtch.S
+ void            swtch(struct context*, struct context*);
+diff --git a/kernel/main.c b/kernel/main.c
+index f0d3171..99ab3b6 100644
+--- a/kernel/main.c
++++ b/kernel/main.c
+@@ -3,6 +3,7 @@
+ #include "memlayout.h"
+ #include "riscv.h"
+ #include "defs.h"
++#include "stat.h"
+ 
+ volatile static int started = 0;
+ 
+@@ -10,6 +11,7 @@ volatile static int started = 0;
+ void
+ main()
+ {
++  
+   if(cpuid() == 0){
+     consoleinit();
+     printfinit();
+@@ -28,6 +30,9 @@ main()
+     iinit();         // inode table
+     fileinit();      // file table
+     virtio_disk_init(); // emulated hard disk
++    init_syscall_stats();
++    
++
+     userinit();      // first user process
+     __sync_synchronize();
+     started = 1;
+diff --git a/kernel/proc.c b/kernel/proc.c
+index 130d9ce..722fa8b 100644
+--- a/kernel/proc.c
++++ b/kernel/proc.c
+@@ -5,6 +5,7 @@
+ #include "spinlock.h"
+ #include "proc.h"
+ #include "defs.h"
++#include "stat.h"
+ 
+ struct cpu cpus[NCPU];
+ 
+@@ -693,3 +694,23 @@ procdump(void)
+     printf("\n");
+   }
+ }
++
++
++
++extern struct syscall_stat stats[MAX_SYSCALLS];
++
++int history(int n){
++
++  
++  struct syscall_stat stat=stats[n];
++  uint64 stat_addr;
++  argaddr(1, &stat_addr);
++  if (copyout(myproc()->pagetable, stat_addr, (char *)&stat, sizeof(stat)) < 0) {
++    printf("sys_history: copyout failed\n");
++    return -1;
++  }
++
++
++  return n;
++}
++
+diff --git a/kernel/stat.c b/kernel/stat.c
+new file mode 100644
+index 0000000..4b93804
+--- /dev/null
++++ b/kernel/stat.c
+@@ -0,0 +1,38 @@
++#include "kernel/types.h"
++#include "stat.h"
++extern char* safestrcpy(char *dst, const char *src, int n);
++
++struct syscall_stat stats[MAX_SYSCALLS];
++void init_syscall_stats(void)
++{
++
++    for (int i = 0; i < MAX_SYSCALLS; i++)
++    {
++        stats[i].count = 0;
++        stats[i].accum_time = 0;
++        // safestrcpy(stats[i].syscall_name, "", 16); // Initialize with empty string
++    }
++    
++    safestrcpy(stats[1].syscall_name, "fork", 16);
++    safestrcpy(stats[2].syscall_name, "exit", 16);
++    safestrcpy(stats[3].syscall_name, "wait", 16);
++    safestrcpy(stats[4].syscall_name, "pipe", 16);
++    safestrcpy(stats[5].syscall_name, "read", 16);
++    safestrcpy(stats[6].syscall_name, "kill", 16);
++    safestrcpy(stats[7].syscall_name, "exec", 16);
++    safestrcpy(stats[8].syscall_name, "fstat", 16);
++    safestrcpy(stats[9].syscall_name, "chdir", 16);
++    safestrcpy(stats[10].syscall_name, "dup", 16);
++    safestrcpy(stats[11].syscall_name, "getpid", 16);
++    safestrcpy(stats[12].syscall_name, "sbrk", 16);
++    safestrcpy(stats[13].syscall_name, "sleep", 16);
++    safestrcpy(stats[14].syscall_name, "uptime", 16);
++    safestrcpy(stats[15].syscall_name, "open", 16);
++    safestrcpy(stats[16].syscall_name, "write", 16);
++    safestrcpy(stats[17].syscall_name, "mknod", 16);
++    safestrcpy(stats[18].syscall_name, "unlink", 16);
++    safestrcpy(stats[19].syscall_name, "link", 16);
++    safestrcpy(stats[20].syscall_name, "mkdir", 16);
++    safestrcpy(stats[21].syscall_name, "close", 16);
++    safestrcpy(stats[22].syscall_name, "history", 16);
++}
+diff --git a/kernel/stat.h b/kernel/stat.h
+index 19543af..42e5125 100644
+--- a/kernel/stat.h
++++ b/kernel/stat.h
+@@ -1,7 +1,7 @@
+ #define T_DIR     1   // Directory
+ #define T_FILE    2   // File
+ #define T_DEVICE  3   // Device
+-
++#define MAX_SYSCALLS 23 // Maximum number of syscalls
+ struct stat {
+   int dev;     // File system's disk device
+   uint ino;    // Inode number
+@@ -9,3 +9,11 @@ struct stat {
+   short nlink; // Number of links to file
+   uint64 size; // Size of file in bytes
+ };
++
++struct syscall_stat {
++    int count;  // The number of the syscall called
++    int accum_time; // The accumulated time spent in the syscall
++    char syscall_name[16]; // The name of the syscall
++};
++
++void init_syscall_stats(void);
+diff --git a/kernel/syscall.c b/kernel/syscall.c
+index ed65409..720a149 100644
+--- a/kernel/syscall.c
++++ b/kernel/syscall.c
+@@ -6,6 +6,7 @@
+ #include "proc.h"
+ #include "syscall.h"
+ #include "defs.h"
++#include "stat.h"
+ 
+ // Fetch the uint64 at addr from the current process.
+ int
+@@ -101,6 +102,7 @@ extern uint64 sys_unlink(void);
+ extern uint64 sys_link(void);
+ extern uint64 sys_mkdir(void);
+ extern uint64 sys_close(void);
++extern uint64 sys_history(void);
+ 
+ // An array mapping syscall numbers from syscall.h
+ // to the function that handles the system call.
+@@ -126,19 +128,50 @@ static uint64 (*syscalls[])(void) = {
+ [SYS_link]    sys_link,
+ [SYS_mkdir]   sys_mkdir,
+ [SYS_close]   sys_close,
++[SYS_history] sys_history,
+ };
+ 
++
++
++
++
++extern struct syscall_stat stats[MAX_SYSCALLS];
++extern uint ticks;
++extern struct spinlock tickslock;
++extern struct spinlock statslock;
++
+ void
+ syscall(void)
+ {
+   int num;
+   struct proc *p = myproc();
+-
++ 
+   num = p->trapframe->a7;
+   if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
+     // Use num to lookup the system call function for num, call it,
+-    // and store its return value in p->trapframe->a0
++    // and store its return value in p->trapframe->a0 
++
++    
++    
++    acquire(&tickslock);
++    uint start = ticks;
++    release(&tickslock);
++
++    // Call the function to measure
+     p->trapframe->a0 = syscalls[num]();
++    // stats[num].count++;
++
++    acquire(&tickslock);
++    uint end = ticks;
++    release(&tickslock);
++
++    // stats[num].accum_time += (end - start); // Accumulate the time taken by this syscall
++    acquire(&statslock); 
++
++    stats[num].count++;
++    stats[num].accum_time += (end - start);
++    release(&statslock);
++
+   } else {
+     printf("%d %s: unknown sys call %d\n",
+             p->pid, p->name, num);
+diff --git a/kernel/syscall.h b/kernel/syscall.h
+index bc5f356..765efde 100644
+--- a/kernel/syscall.h
++++ b/kernel/syscall.h
+@@ -20,3 +20,5 @@
+ #define SYS_link   19
+ #define SYS_mkdir  20
+ #define SYS_close  21
++#define SYS_history 22
++ 
+\ No newline at end of file
+diff --git a/kernel/sysproc.c b/kernel/sysproc.c
+index 3b4d5bd..42f79f1 100644
+--- a/kernel/sysproc.c
++++ b/kernel/sysproc.c
+@@ -91,3 +91,22 @@ sys_uptime(void)
+   release(&tickslock);
+   return xticks;
+ }
++
++
++
++uint64
++sys_history(void)
++{
++
++  int n;
++  argint(0, &n);
++
++  if(n<1 || n>22){
++    printf("Invalid syscall number: %d. Valid range is 1 to 22.\n", n);
++    return -1;
++  }
++
++  return history(n);
++  
++ 
++}
+diff --git a/kernel/trap.c b/kernel/trap.c
+index d454a7d..2f8078b 100644
+--- a/kernel/trap.c
++++ b/kernel/trap.c
+@@ -9,6 +9,8 @@
+ struct spinlock tickslock;
+ uint ticks;
+ 
++struct spinlock statslock;
++
+ extern char trampoline[], uservec[], userret[];
+ 
+ // in kernelvec.S, calls kerneltrap().
+@@ -20,6 +22,7 @@ void
+ trapinit(void)
+ {
+   initlock(&tickslock, "time");
++  initlock(&statslock, "stats");
+ }
+ 
+ // set up to take exceptions and traps while in the kernel.
+diff --git a/newalveeyayy.txt b/newalveeyayy.txt
+new file mode 100644
+index 0000000..e69de29
+diff --git a/user/history.c b/user/history.c
+new file mode 100644
+index 0000000..d373ad6
+--- /dev/null
++++ b/user/history.c
+@@ -0,0 +1,48 @@
++#include "kernel/types.h"
++#include "kernel/stat.h"
++#include "user/user.h"
++
++
++
++
++
++int main(int argc, char *argv[])
++{
++
++    // printf(" history no %s\n", argv[1]);
++    int syscall_num = 0;
++    struct syscall_stat stat= {0, 0, "alvee"};
++
++
++
++    if(argc>1){
++        syscall_num =atoi(argv[1]);
++         int history_fd=history(syscall_num, &stat);
++
++        if (history_fd>0){
++            printf("\n%d: syscall: %s, #: %d, time: %d\n", 
++                history_fd, 
++                stat.syscall_name, 
++                stat.count, 
++                stat.accum_time);
++        }
++    }
++    else if(argc==1){
++       for(int i = 1; i < MAX_SYSCALLS; i++){
++            int history_fd=history(i, &stat);
++            if (history_fd>0){
++                printf("\n%d: syscall: %s, #: %d, time: %d\n", 
++                    history_fd, 
++                    stat.syscall_name, 
++                    stat.count, 
++                    stat.accum_time);
++            }
++        }
++        printf("\n");
++    }
++    else{
++        printf("Invalid arguments. Please provide a syscall number from 1 to %d.\n",MAX_SYSCALLS-1);
++        return -1;
++    }
++    return 0;
++}
+\ No newline at end of file
+diff --git a/user/user.h b/user/user.h
+index f16fe27..687f98a 100644
+--- a/user/user.h
++++ b/user/user.h
+@@ -1,4 +1,6 @@
+ struct stat;
++struct syscall_stat;
++
+ 
+ // system calls
+ int fork(void);
+@@ -22,6 +24,7 @@ int getpid(void);
+ char* sbrk(int);
+ int sleep(int);
+ int uptime(void);
++int history(int,struct syscall_stat*);
+ 
+ // ulib.c
+ int stat(const char*, struct stat*);
+diff --git a/user/usys.pl b/user/usys.pl
+index 01e426e..9d54e5b 100755
+--- a/user/usys.pl
++++ b/user/usys.pl
+@@ -36,3 +36,4 @@ entry("getpid");
+ entry("sbrk");
+ entry("sleep");
+ entry("uptime");
++entry("history");

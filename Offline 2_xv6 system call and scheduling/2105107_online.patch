@@ -1,0 +1,306 @@
+diff --git a/Makefile b/Makefile
+index f8c820e..62bae3b 100644
+--- a/Makefile
++++ b/Makefile
+@@ -139,6 +139,7 @@ UPROGS=\
+ 	$U/_grind\
+ 	$U/_wc\
+ 	$U/_zombie\
++	$U/_freqall\
+ 
+ fs.img: mkfs/mkfs README $(UPROGS)
+ 	mkfs/mkfs fs.img README $(UPROGS)
+diff --git a/kernel/defs.h b/kernel/defs.h
+index d1b6bb9..c5f11a9 100644
+--- a/kernel/defs.h
++++ b/kernel/defs.h
+@@ -8,6 +8,7 @@ struct spinlock;
+ struct sleeplock;
+ struct stat;
+ struct superblock;
++struct freq_array;
+ 
+ // bio.c
+ void            binit(void);
+@@ -106,6 +107,8 @@ void            yield(void);
+ int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
+ int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
+ void            procdump(void);
++int             countFreq(char*);
++
+ 
+ // swtch.S
+ void            swtch(struct context*, struct context*);
+diff --git a/kernel/proc.c b/kernel/proc.c
+index 130d9ce..3542964 100644
+--- a/kernel/proc.c
++++ b/kernel/proc.c
+@@ -5,6 +5,7 @@
+ #include "spinlock.h"
+ #include "proc.h"
+ #include "defs.h"
++#include "stat.h"
+ 
+ struct cpu cpus[NCPU];
+ 
+@@ -693,3 +694,90 @@ procdump(void)
+     printf("\n");
+   }
+ }
++
++
++
++// int countFreq(char *ch, struct freq_array *fa){
++
++
++
++
++//   printf("i am in countfreq in proc.c %s\n",ch);
++//   for(int i=0;i<128;i++){
++//     fa->counts[i]=0;
++//   }
++//   printf("%d",fa->counts[50]);//debugging
++//   uint64 stat_addr;
++//   argaddr(1,&stat_addr);
++
++
++//   for(int i=0; ch[i]!='\0';i++){
++//     int n=(int)ch[i];
++//     fa->counts[n]++;
++//   }
++//  if( copyout(myproc()->pagetable,stat_addr,(char *)&fa,sizeof(fa)<0)){
++//   printf("failed\n");
++//   return 0;
++//  }
++//  return 1;
++
++// }
++
++#include <stdlib.h>
++
++int
++countFreq(char *ch) {
++
++  // printf("now it is in countrfreq in proc.c %s\n", ch);
++
++
++  struct freq_array fa;  
++  // fa = (struct freq_array *)user_fa;
++  // printf("here\n");
++
++  // copyin(myproc()->pagetable,user_fa, (char *)&fa, sizeof(struct freq_array));
++
++  printf("Target String %s --from kernel countFreq\n", ch);
++    for (int i = 0; i < 128; i++)
++    {
++      fa.counts[i] = 0;
++    }
++
++    // printf("i am in countfreq in proc.c %s\n", ch);
++    // printf("counts[50]=%d\n", fa.counts[50]); // Debugging
++    // printf("from kernel space\n\n");
++
++
++    uint64 user_fa;
++    argaddr(1, (uint64 *)&user_fa);
++
++
++    for (int i = 0; ch[i] != '\0'; i++) {
++        int n=(int)ch[i];      
++        // printf("Character: %c, ASCII: %d\n", (char)n, n);
++        if (n < 128) { 
++            fa.counts[n]++;
++        }
++    }
++
++
++    // for(int i=0;i<128;i++){
++    //     if(fa.counts[i] > 0) 
++    //         printf("Character %d has frequency %d\n", i, fa.counts[i]);
++    // }
++
++    // Get the user-space address of fa
++    argaddr(1, &user_fa);
++    printf("end kernel\n");
++    // Copy the counts array to the user-space fa->counts
++
++
++    if (copyout(myproc()->pagetable, user_fa, (char*)&fa, sizeof(fa)) < 0) 
++    {
++        printf("failed to copyout\n");
++        return -1;
++    }
++     return 1;
++  }
++   
++
+diff --git a/kernel/stat.h b/kernel/stat.h
+index 19543af..2804a92 100644
+--- a/kernel/stat.h
++++ b/kernel/stat.h
+@@ -9,3 +9,8 @@ struct stat {
+   short nlink; // Number of links to file
+   uint64 size; // Size of file in bytes
+ };
++
++
++struct freq_array{
++  int counts[128];
++};
+\ No newline at end of file
+diff --git a/kernel/syscall.c b/kernel/syscall.c
+index ed65409..959bebb 100644
+--- a/kernel/syscall.c
++++ b/kernel/syscall.c
+@@ -101,6 +101,7 @@ extern uint64 sys_unlink(void);
+ extern uint64 sys_link(void);
+ extern uint64 sys_mkdir(void);
+ extern uint64 sys_close(void);
++extern uint64 sys_countFreq(void);
+ 
+ // An array mapping syscall numbers from syscall.h
+ // to the function that handles the system call.
+@@ -126,6 +127,7 @@ static uint64 (*syscalls[])(void) = {
+ [SYS_link]    sys_link,
+ [SYS_mkdir]   sys_mkdir,
+ [SYS_close]   sys_close,
++[SYS_countFreq] sys_countFreq,
+ };
+ 
+ void
+diff --git a/kernel/syscall.h b/kernel/syscall.h
+index bc5f356..7c0768b 100644
+--- a/kernel/syscall.h
++++ b/kernel/syscall.h
+@@ -20,3 +20,4 @@
+ #define SYS_link   19
+ #define SYS_mkdir  20
+ #define SYS_close  21
++#define SYS_countFreq   22
+diff --git a/kernel/sysproc.c b/kernel/sysproc.c
+index 3b4d5bd..b6afaf9 100644
+--- a/kernel/sysproc.c
++++ b/kernel/sysproc.c
+@@ -5,6 +5,43 @@
+ #include "memlayout.h"
+ #include "spinlock.h"
+ #include "proc.h"
++// #include "stat.h"
++
++
++
++uint64
++sys_countFreq(void){
++    /*void
++  argaddr(int n, uint64 *ip)
++  {
++    *ip = argraw(n);
++  }*/
++  
++  char ch[256];
++  
++  // argaddr(0, (uint64*)&n);  // Fetch the first argument as a string
++  // argaddr(0,(uint64*)&ch);
++  argstr(0,ch,sizeof(ch));
++
++  // printf("sys_countFreqn=%s\n", ch);
++  
++  
++
++
++
++  // printf("alvee in sys_countFreq\n");
++
++  // printf("Target String %s--from kernel sys_countFreq",ch);
++
++   return countFreq(ch);
++}
++
++
++
++
++
++
++
+ 
+ uint64
+ sys_exit(void)
+diff --git a/user/freqall.c b/user/freqall.c
+new file mode 100644
+index 0000000..dff8934
+--- /dev/null
++++ b/user/freqall.c
+@@ -0,0 +1,43 @@
++#include "kernel/types.h"
++#include "kernel/stat.h"
++#include "user/user.h"
++
++int main(int argc,char *argv[]){
++    struct freq_array *fa = (struct freq_array *)malloc(sizeof(struct freq_array));    
++    
++    
++    if(argc<2){
++        printf("enter correct argument\n");
++        return 0;
++    }
++
++
++    // printf("you are in freq all %s\n",argv[1]);
++    int res=countFreq(argv[1], fa);
++    // printf("res=%d\n", res);
++
++    if(res<0){
++        printf("failed");
++        return 0;
++    }
++
++    for(int i=0;i<128;i++){
++        if(fa->counts[i]>0){
++            // printf("i=%d :", i);
++            // printf("f=%d  ", fa->counts[i]);
++
++            // // char ch=(char)i;
++            // printf("        %c\n",(char)i);
++            printf("i=%d : f=%d ", i, fa->counts[i]);
++            char ch=(char)i;
++            write(1, &ch, 1); // Write the character to stdout
++            printf("        \n");
++            
++        }
++        
++    }
++    // char ch=(char)102;
++    // write(1,&ch,1);
++    // printf("%c\n", ch); // Print the character 'f' to stdout
++    return 0;
++}
+\ No newline at end of file
+diff --git a/user/user.h b/user/user.h
+index f16fe27..143223c 100644
+--- a/user/user.h
++++ b/user/user.h
+@@ -1,5 +1,5 @@
+ struct stat;
+-
++struct freq_array;
+ // system calls
+ int fork(void);
+ int exit(int) __attribute__((noreturn));
+@@ -22,6 +22,8 @@ int getpid(void);
+ char* sbrk(int);
+ int sleep(int);
+ int uptime(void);
++int countFreq(char* , struct freq_array*);
++
+ 
+ // ulib.c
+ int stat(const char*, struct stat*);
+diff --git a/user/usys.pl b/user/usys.pl
+index 01e426e..b8d8b23 100755
+--- a/user/usys.pl
++++ b/user/usys.pl
+@@ -36,3 +36,4 @@ entry("getpid");
+ entry("sbrk");
+ entry("sleep");
+ entry("uptime");
++entry("countFreq");
